@@ -6,7 +6,7 @@ Adafruit_NeoPixel strip1(STRIP1_LEDS, STRIP1_PIN, NEO_GRB + NEO_KHZ800);
 Adafruit_NeoPixel strip2(STRIP2_LEDS, STRIP2_PIN, NEO_GRB + NEO_KHZ800);
 
 // Current game mode
-Mode currentMode = BOSS_MODE;
+Mode currentMode = CLOCK_MODE;
 
 void setup() {
   initializeHardware();
@@ -23,6 +23,7 @@ void loop() {
 void handleModeSwitch() {
   if (!digitalRead(BTN_MODE)) {
     currentMode = (Mode)((currentMode + 1) % 3);
+    clearStrips(); // Clear strips on mode change
     delay(300); // Debounce
     switch (currentMode) {
       case CLOCK_MODE: Serial.println(">> Mode: CLOCK"); break;

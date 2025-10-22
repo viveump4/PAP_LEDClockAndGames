@@ -3,7 +3,7 @@
 // Boss fight variables
 int playerPos = 0;
 int playerDir = 1;
-float playerSpeed = 2.0;
+float playerSpeed = 4.0;
 unsigned long lastPlayerMove = 0;
 
 // Attack system
@@ -18,7 +18,7 @@ unsigned long lastAttackTime = 0;
 bool wallsClosing = false;
 int leftWallStart = -1;
 int rightWallStart = -1;
-int wallWidth = 3;
+int wallWidth = STRIP1_LEDS / 8;
 bool phase1Flash = false;
 unsigned long lastPhase1Flash = 0;
 
@@ -67,7 +67,10 @@ void handlePlayerMovement() {
     lastButtonPress = now;
   }
   
-  if (now - lastPlayerMove > (1000.0 / playerSpeed)) {
+  // Increase player speed in phase 2 for better reaction time
+  float currentSpeed = phase2 ? playerSpeed * 1.5 : playerSpeed;
+  
+  if (now - lastPlayerMove > (1000.0 / currentSpeed)) {
     playerPos = wrapPosition(playerPos + playerDir);
     lastPlayerMove = now;
   }
@@ -146,7 +149,11 @@ void drawPhase1Attack() {
   unsigned long now = millis();
   unsigned long attackElapsed = now - attackStartTime;
   
-  if (attackElapsed < attackWarningDuration) {
+  // Warning duration decreases as boss HP decreases
+  float hpRatio = (float)bossHP / STRIP2_LEDS;
+  unsigned long dynamicWarningDuration = attackWarningDuration * (0.5 + 0.5 * hpRatio);
+  
+  if (attackElapsed < dynamicWarningDuration) {
     drawPhase1Warning();
   } else {
     drawPhase1Active();
@@ -156,8 +163,11 @@ void drawPhase1Attack() {
 void drawPhase1Warning() {
   unsigned long now = millis();
   
-  // Warning phase - flashing walls that will appear (dark red)
-  if (now - lastPhase1Flash > (400 / (playerSpeed / 2.0))) {
+  // Flash speed increases as boss HP decreases
+  float hpRatio = (float)bossHP / STRIP2_LEDS;
+  int flashSpeed = 400 + (400 * (1.0 - hpRatio)); // 400ms to 800ms based on HP
+  
+  if (now - lastPhase1Flash > flashSpeed) {
     phase1Flash = !phase1Flash;
     lastPhase1Flash = now;
   }
@@ -183,7 +193,11 @@ void drawPhase2Attack() {
   unsigned long now = millis();
   unsigned long attackElapsed = now - attackStartTime;
   
-  if (attackElapsed < attackWarningDuration) {
+  // Warning duration decreases as boss HP decreases
+  float hpRatio = (float)bossHP / STRIP2_LEDS;
+  unsigned long dynamicWarningDuration = attackWarningDuration * (0.5 + 0.5 * hpRatio);
+  
+  if (attackElapsed < dynamicWarningDuration) {
     drawPhase2Warning();
   } else {
     drawPhase2Active();
@@ -193,17 +207,16 @@ void drawPhase2Attack() {
 void drawPhase2Warning() {
   unsigned long now = millis();
   
-  // Warning phase - flash danger zones and show safe areas
-  if (now - lastPhase2Flash > (300 / (playerSpeed / 2.0))) {
+  // Flash speed increases as boss HP decreases
+  float hpRatio = (float)bossHP / STRIP2_LEDS;
+  int flashSpeed = 300 + (300 * (1.0 - hpRatio)); // 300ms to 600ms based on HP
+  
+  if (now - lastPhase2Flash > flashSpeed) {
     phase2Flash = !phase2Flash;
     lastPhase2Flash = now;
   }
   
   if (phase2Flash) {
-    // Flash danger zones (orange) and show safe areas (green)
-    // Declare variables outside switch to avoid scope issues
-    int safeZone, safeZoneMiddle, safeZone1, safeZone2;
-    
     switch (attackPattern) {
       case 0: // HOURGLASS pattern
         for (int i = 0; i < dangerZone1Width; i++) {
@@ -212,9 +225,6 @@ void drawPhase2Warning() {
         for (int i = 0; i < dangerZone2Width; i++) {
           strip1.setPixelColor(wrapPosition(dangerZone2Start + i), strip1.Color(255, 100, 0)); // Orange danger
         }
-        // Show safe zones
-        safeZone = wrapPosition(dangerZone1Start + dangerZone1Width + 2);
-        strip1.setPixelColor(safeZone, strip1.Color(0, 255, 0)); // Green safe
         break;
         
       case 1: // DOUBLE WALLS pattern
@@ -224,9 +234,6 @@ void drawPhase2Warning() {
         for (int i = 0; i < dangerZone2Width; i++) {
           strip1.setPixelColor(wrapPosition(dangerZone2Start + i), strip1.Color(255, 100, 0)); // Orange danger
         }
-        // Show safe zone between walls
-        safeZoneMiddle = wrapPosition((dangerZone1Start + dangerZone1Width + dangerZone2Start) / 2);
-        strip1.setPixelColor(safeZoneMiddle, strip1.Color(0, 255, 0)); // Green safe
         break;
         
       case 2: // TRIPLE DANGER ZONES pattern
@@ -239,11 +246,6 @@ void drawPhase2Warning() {
         for (int i = 0; i < dangerZone3Width; i++) {
           strip1.setPixelColor(wrapPosition(dangerZone3Start + i), strip1.Color(255, 100, 0)); // Orange danger
         }
-        // Show safe zones
-        safeZone1 = wrapPosition(dangerZone1Start - 3);
-        safeZone2 = wrapPosition(dangerZone2Start + dangerZone2Width + 3);
-        strip1.setPixelColor(safeZone1, strip1.Color(0, 255, 0)); // Green safe
-        strip1.setPixelColor(safeZone2, strip1.Color(0, 255, 0)); // Green safe
         break;
     }
   }
@@ -291,7 +293,11 @@ void checkCollisions() {
   if (attackActive) {
     unsigned long attackElapsed = now - attackStartTime;
     
-    if (attackElapsed >= attackWarningDuration) { 
+    // Use dynamic warning duration based on boss HP
+    float hpRatio = (float)bossHP / STRIP2_LEDS;
+    unsigned long dynamicWarningDuration = attackWarningDuration * (0.5 + 0.5 * hpRatio);
+    
+    if (attackElapsed >= dynamicWarningDuration) { 
       if (!phase2) {
         checkPhase1Collision();
       } else {
@@ -414,8 +420,8 @@ void startAttack() {
   
   if (!phase2) {
     // Phase 1: Closing walls
-    leftWallStart = wrapPosition(playerPos - 6);
-    rightWallStart = wrapPosition(playerPos + 3);
+    leftWallStart = wrapPosition(playerPos - STRIP1_LEDS / 4);
+    rightWallStart = wrapPosition(playerPos + STRIP1_LEDS / 8);
     
     Serial.print("FIXED WALLS! Left: ");
     Serial.print(leftWallStart);
@@ -430,28 +436,28 @@ void startAttack() {
     
     switch (attackPattern) {
       case 0: // Hourglass pattern
-        dangerZone1Start = wrapPosition(playerPos - 4);
-        dangerZone1Width = 8;
-        dangerZone2Start = wrapPosition(playerPos + 8);
-        dangerZone2Width = 8;
+        dangerZone1Start = wrapPosition(playerPos - STRIP1_LEDS / 6);
+        dangerZone1Width = STRIP1_LEDS / 3;
+        dangerZone2Start = wrapPosition(playerPos + STRIP1_LEDS / 3);
+        dangerZone2Width = STRIP1_LEDS / 3;
         Serial.println("HOURGLASS PATTERN! Find the narrow safe path!");
         break;
         
       case 1: // Double walls pattern
-        dangerZone1Start = wrapPosition(playerPos - 6);
-        dangerZone1Width = 4;
-        dangerZone2Start = wrapPosition(playerPos + 4);
-        dangerZone2Width = 4;
+        dangerZone1Start = wrapPosition(playerPos - STRIP1_LEDS / 4);
+        dangerZone1Width = STRIP1_LEDS / 6;
+        dangerZone2Start = wrapPosition(playerPos + STRIP1_LEDS / 6);
+        dangerZone2Width = STRIP1_LEDS / 6;
         Serial.println("DOUBLE WALLS! Safe zone in the middle!");
         break;
         
       case 2: // Triple danger zones pattern
-        dangerZone1Start = wrapPosition(playerPos - 8);
-        dangerZone1Width = 3;
+        dangerZone1Start = wrapPosition(playerPos - STRIP1_LEDS / 3);
+        dangerZone1Width = STRIP1_LEDS / 8;
         dangerZone2Start = wrapPosition(playerPos);
-        dangerZone2Width = 3;
-        dangerZone3Start = wrapPosition(playerPos + 6);
-        dangerZone3Width = 3;
+        dangerZone2Width = STRIP1_LEDS / 8;
+        dangerZone3Start = wrapPosition(playerPos + STRIP1_LEDS / 4);
+        dangerZone3Width = STRIP1_LEDS / 8;
         Serial.println("TRIPLE DANGER ZONES! Navigate the scattered safe areas!");
         break;
     }

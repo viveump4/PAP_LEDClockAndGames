@@ -10,9 +10,8 @@ void printClockTime(int hours, int minutes, int seconds);
 
 // Reaction game functions
 void playReactionGame();
-void handleReactionInput();
+void handleReactionInput(int pos, int target);
 void updateReactionDisplay(int target, int pos);
-void processReactionResult(int pos, int target);
 
 // Boss fight - Main functions
 void playBossFight();

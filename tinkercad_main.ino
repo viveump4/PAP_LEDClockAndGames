@@ -15,7 +15,7 @@ Adafruit_NeoPixel strip2(STRIP2_LEDS, STRIP2_PIN, NEO_GRB + NEO_KHZ800);
 
 // Game modes
 enum Mode { CLOCK_MODE, REACTION_MODE, BOSS_MODE };
-Mode currentMode = BOSS_MODE;
+Mode currentMode = CLOCK_MODE;
 
 // Clock mode variables
 unsigned long lastClockUpdate = 0;
@@ -41,7 +41,7 @@ unsigned long lastAttackTime = 0;
 bool wallsClosing = false;
 int leftWallStart = -1;
 int rightWallStart = -1;
-int wallWidth = 3;
+int wallWidth = STRIP1_LEDS / 8;
 bool phase1Flash = false;
 unsigned long lastPhase1Flash = 0;
 
@@ -82,6 +82,7 @@ void loop() {
 void handleModeSwitch() {
   if (!digitalRead(BTN_MODE)) {
     currentMode = (Mode)((currentMode + 1) % 3);
+    clearStrips(); // Clear strips on mode change
     delay(300); // Debounce
     switch (currentMode) {
       case CLOCK_MODE: Serial.println(">> Mode: CLOCK"); break;
@@ -174,60 +175,88 @@ void printClockTime(int hours, int minutes, int seconds) {
 
 // Main reaction game loop
 void playReactionGame() {
-  static int target = random(STRIP1_LEDS);
-  static int pos = 0;
+  static int target = random(STRIP1_LEDS);  // Target position (red)
+  static int pos = 0;                       // Moving position (yellow)
+  static unsigned long lastMove = 0;        // For controlling LED movement speed
+  static int lastDifficulty = 0;           // Track difficulty changes
+  
+  unsigned long now = millis();
+  
+  // If difficulty changed, move the target
+  if (lastDifficulty != difficulty) {
+    do {
+      target = random(STRIP1_LEDS);
+    } while (target == pos);
+    lastDifficulty = difficulty;
+  }
+  
+  // Calculate speed based on difficulty (starts faster, gets very fast)
+  int baseDelay = map(difficulty, 0, STRIP2_LEDS-1, 50, 10); // 50ms at start, 10ms at max difficulty
+  
+  // Move the yellow LED based on speed
+  if (now - lastMove > baseDelay) {
+    pos = (pos + 1) % STRIP1_LEDS;  // Wrap around
+    lastMove = now;
+    
+    // Print debug info
+    Serial.print("Target: ");
+    Serial.print(target);
+    Serial.print(" Pos: ");
+    Serial.print(pos);
+    Serial.print(" Difficulty: ");
+    Serial.println(difficulty);
+  }
 
   updateReactionDisplay(target, pos);
-  handleReactionInput();
-  
-  // Move player position
-  pos++;
-  if (pos >= STRIP1_LEDS) pos = 0;
-  delay(map(difficulty, 1, STRIP2_LEDS, 100, 30));
+  handleReactionInput(pos, target);
 }
 
 // Update LED display for reaction game
 void updateReactionDisplay(int target, int pos) {
   clearStrips();
 
-  // Green target, blue hints (only at low difficulty)
-  strip1.setPixelColor(target, strip1.Color(0, 255, 0));
-  if (difficulty < (STRIP2_LEDS/2)) {
-    strip1.setPixelColor(target - 1, strip1.Color(0, 0, 255));
-    strip1.setPixelColor(target + 1, strip1.Color(0, 0, 255));
-  }
+  // Red target (single LED)
+  strip1.setPixelColor(target, strip1.Color(255, 0, 0));
 
-  // Red player position
-  strip1.setPixelColor(pos, strip1.Color(255, 0, 0));
+  // Yellow moving position
+  strip1.setPixelColor(pos, strip1.Color(255, 255, 0));
 
-  // Yellow difficulty indicator
-  for (int i = 0; i < difficulty; i++)
+  // Show difficulty level on strip2
+  for (int i = 0; i < difficulty; i++) {
     strip2.setPixelColor(i, strip2.Color(255, 255, 0));
+  }
 
   strip1.show();
   strip2.show();
 }
 
 // Handle button input for reaction game
-void handleReactionInput() {
+void handleReactionInput(int pos, int target) {
   if (!digitalRead(BTN_ACTION)) {
-    static int target = random(STRIP1_LEDS);
-    static int pos = 0;
-    
-    processReactionResult(pos, target);
-    target = random(STRIP1_LEDS);
-    delay(300); // Debounce
-  }
-}
+    if (pos == target) {  // Must hit exactly on target
+      successFlash();
+      if (difficulty < STRIP2_LEDS-1) {
+        difficulty++;
+        Serial.print("HIT! New difficulty: ");
+        Serial.println(difficulty);
+      } else {
+        Serial.println("PERFECT! Maximum difficulty!");
+      }
+    } else {
+      failFlash();
+      if (difficulty > 0) {
+        difficulty--;
+        Serial.print("MISS! New difficulty: ");
+        Serial.println(difficulty);
+      }
+    }
 
-// Process hit/miss result and adjust difficulty
-void processReactionResult(int pos, int target) {
-  if (pos == target || pos == target - 1 || pos == target + 1) {
-    successFlash();
-    if (difficulty < STRIP2_LEDS) difficulty++;
-  } else {
-    failFlash();
-    if (difficulty > 1) difficulty--;
+    // Generate new target position (make sure it's not at current position)
+    do {
+      target = random(STRIP1_LEDS);
+    } while (target == pos);
+    
+    delay(200); // Shorter debounce for faster gameplay
   }
 }
 
@@ -256,7 +285,10 @@ void handlePlayerMovement() {
     lastButtonPress = now;
   }
   
-  if (now - lastPlayerMove > (1000.0 / playerSpeed)) {
+  // Increase player speed in phase 2 for better reaction time
+  float currentSpeed = phase2 ? playerSpeed * 1.5 : playerSpeed;
+  
+  if (now - lastPlayerMove > (1000.0 / currentSpeed)) {
     playerPos = wrapPosition(playerPos + playerDir);
     lastPlayerMove = now;
   }
@@ -336,7 +368,11 @@ void drawPhase1Attack() {
   unsigned long now = millis();
   unsigned long attackElapsed = now - attackStartTime;
   
-  if (attackElapsed < attackWarningDuration) {
+  // Warning duration decreases as boss HP decreases
+  float hpRatio = (float)bossHP / STRIP2_LEDS;
+  unsigned long dynamicWarningDuration = attackWarningDuration * (0.5 + 0.5 * hpRatio);
+  
+  if (attackElapsed < dynamicWarningDuration) {
     drawPhase1Warning();
   } else {
     drawPhase1Active();
@@ -347,7 +383,11 @@ void drawPhase1Attack() {
 void drawPhase1Warning() {
   unsigned long now = millis();
   
-  if (now - lastPhase1Flash > (400 / (playerSpeed / 2.0))) {
+  // Flash speed increases as boss HP decreases
+  float hpRatio = (float)bossHP / STRIP2_LEDS;
+  int flashSpeed = 400 + (400 * (1.0 - hpRatio)); // 400ms to 800ms based on HP
+  
+  if (now - lastPhase1Flash > flashSpeed) {
     phase1Flash = !phase1Flash;
     lastPhase1Flash = now;
   }
@@ -373,7 +413,11 @@ void drawPhase2Attack() {
   unsigned long now = millis();
   unsigned long attackElapsed = now - attackStartTime;
   
-  if (attackElapsed < attackWarningDuration) {
+  // Warning duration decreases as boss HP decreases
+  float hpRatio = (float)bossHP / STRIP2_LEDS;
+  unsigned long dynamicWarningDuration = attackWarningDuration * (0.5 + 0.5 * hpRatio);
+  
+  if (attackElapsed < dynamicWarningDuration) {
     drawPhase2Warning();
   } else {
     drawPhase2Active();
@@ -384,14 +428,16 @@ void drawPhase2Attack() {
 void drawPhase2Warning() {
   unsigned long now = millis();
   
-  if (now - lastPhase2Flash > (300 / (playerSpeed / 2.0))) {
+  // Flash speed increases as boss HP decreases
+  float hpRatio = (float)bossHP / STRIP2_LEDS;
+  int flashSpeed = 300 + (300 * (1.0 - hpRatio)); // 300ms to 600ms based on HP
+  
+  if (now - lastPhase2Flash > flashSpeed) {
     phase2Flash = !phase2Flash;
     lastPhase2Flash = now;
   }
   
   if (phase2Flash) {
-    int safeZone, safeZoneMiddle, safeZone1, safeZone2;
-    
     switch (attackPattern) {
       case 0: // Hourglass pattern
         for (int i = 0; i < dangerZone1Width; i++) {
@@ -400,8 +446,6 @@ void drawPhase2Warning() {
         for (int i = 0; i < dangerZone2Width; i++) {
           strip1.setPixelColor(wrapPosition(dangerZone2Start + i), strip1.Color(255, 100, 0));
         }
-        safeZone = wrapPosition(dangerZone1Start + dangerZone1Width + 2);
-        strip1.setPixelColor(safeZone, strip1.Color(0, 255, 0));
         break;
         
       case 1: // Double walls pattern
@@ -411,8 +455,6 @@ void drawPhase2Warning() {
         for (int i = 0; i < dangerZone2Width; i++) {
           strip1.setPixelColor(wrapPosition(dangerZone2Start + i), strip1.Color(255, 100, 0));
         }
-        safeZoneMiddle = wrapPosition((dangerZone1Start + dangerZone1Width + dangerZone2Start) / 2);
-        strip1.setPixelColor(safeZoneMiddle, strip1.Color(0, 255, 0));
         break;
         
       case 2: // Triple danger zones pattern
@@ -425,10 +467,6 @@ void drawPhase2Warning() {
         for (int i = 0; i < dangerZone3Width; i++) {
           strip1.setPixelColor(wrapPosition(dangerZone3Start + i), strip1.Color(255, 100, 0));
         }
-        safeZone1 = wrapPosition(dangerZone1Start - 3);
-        safeZone2 = wrapPosition(dangerZone2Start + dangerZone2Width + 3);
-        strip1.setPixelColor(safeZone1, strip1.Color(0, 255, 0));
-        strip1.setPixelColor(safeZone2, strip1.Color(0, 255, 0));
         break;
     }
   }
@@ -476,7 +514,11 @@ void checkCollisions() {
   if (attackActive) {
     unsigned long attackElapsed = now - attackStartTime;
     
-    if (attackElapsed >= attackWarningDuration) { 
+    // Use dynamic warning duration based on boss HP
+    float hpRatio = (float)bossHP / STRIP2_LEDS;
+    unsigned long dynamicWarningDuration = attackWarningDuration * (0.5 + 0.5 * hpRatio);
+    
+    if (attackElapsed >= dynamicWarningDuration) { 
       if (!phase2) {
         checkPhase1Collision();
       } else {
@@ -599,8 +641,8 @@ void startAttack() {
   
   if (!phase2) {
     // Phase 1: Closing walls
-    leftWallStart = wrapPosition(playerPos - 6);
-    rightWallStart = wrapPosition(playerPos + 3);
+    leftWallStart = wrapPosition(playerPos - STRIP1_LEDS / 4);
+    rightWallStart = wrapPosition(playerPos + STRIP1_LEDS / 8);
     
     Serial.print("FIXED WALLS! Left: ");
     Serial.print(leftWallStart);
@@ -615,28 +657,28 @@ void startAttack() {
     
     switch (attackPattern) {
       case 0: // Hourglass pattern
-        dangerZone1Start = wrapPosition(playerPos - 4);
-        dangerZone1Width = 8;
-        dangerZone2Start = wrapPosition(playerPos + 8);
-        dangerZone2Width = 8;
+        dangerZone1Start = wrapPosition(playerPos - STRIP1_LEDS / 6);
+        dangerZone1Width = STRIP1_LEDS / 3;
+        dangerZone2Start = wrapPosition(playerPos + STRIP1_LEDS / 3);
+        dangerZone2Width = STRIP1_LEDS / 3;
         Serial.println("HOURGLASS PATTERN! Find the narrow safe path!");
         break;
         
       case 1: // Double walls pattern
-        dangerZone1Start = wrapPosition(playerPos - 6);
-        dangerZone1Width = 4;
-        dangerZone2Start = wrapPosition(playerPos + 4);
-        dangerZone2Width = 4;
+        dangerZone1Start = wrapPosition(playerPos - STRIP1_LEDS / 4);
+        dangerZone1Width = STRIP1_LEDS / 6;
+        dangerZone2Start = wrapPosition(playerPos + STRIP1_LEDS / 6);
+        dangerZone2Width = STRIP1_LEDS / 6;
         Serial.println("DOUBLE WALLS! Safe zone in the middle!");
         break;
         
       case 2: // Triple danger zones pattern
-        dangerZone1Start = wrapPosition(playerPos - 8);
-        dangerZone1Width = 3;
+        dangerZone1Start = wrapPosition(playerPos - STRIP1_LEDS / 3);
+        dangerZone1Width = STRIP1_LEDS / 8;
         dangerZone2Start = wrapPosition(playerPos);
-        dangerZone2Width = 3;
-        dangerZone3Start = wrapPosition(playerPos + 6);
-        dangerZone3Width = 3;
+        dangerZone2Width = STRIP1_LEDS / 8;
+        dangerZone3Start = wrapPosition(playerPos + STRIP1_LEDS / 4);
+        dangerZone3Width = STRIP1_LEDS / 8;
         Serial.println("TRIPLE DANGER ZONES! Navigate the scattered safe areas!");
         break;
     }
