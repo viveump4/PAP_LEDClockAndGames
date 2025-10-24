@@ -1,3 +1,3 @@
 # LED Clock and Games
 
-![Image description](/tinkercad_circuit.png)
+![tinkercad circuit](tinkercad/tinkercad_circuit.png)
